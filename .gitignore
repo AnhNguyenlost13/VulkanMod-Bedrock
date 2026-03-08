@@ -1,0 +1,6 @@
+build*/
+.claude/
+converted_materials/
+*.dxbc
+*.spv
+test_*.material.bin
