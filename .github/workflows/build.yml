@@ -1,0 +1,107 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -A x64
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FuckDX
+          path: build/Release/FuckDX.dll
+
+  test-converter:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build dxil-spirv
+        run: |
+          cmake -S external/dxil-spirv -B external/dxil-spirv/build -A x64
+          cmake --build external/dxil-spirv/build --config Release --target dxil-spirv
+
+      - name: Download game files
+        run: |
+          $release = Invoke-RestMethod "https://api.github.com/repos/bubbles-wow/mcbe-gdk-unpack-archive/releases/latest"
+          $zip = $release.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
+          Write-Host "Downloading $($zip.name) ($([math]::Round($zip.size / 1MB, 1)) MB)..."
+          Invoke-WebRequest -Uri $zip.browser_download_url -OutFile game.zip
+          Expand-Archive game.zip -DestinationPath game
+
+      - name: Find materials directory
+        id: find-materials
+        run: |
+          $dir = Get-ChildItem -Path game -Recurse -Directory -Filter "materials" |
+            Where-Object { $_.Parent.Name -eq "renderer" } |
+            Select-Object -First 1
+          if (-not $dir) { throw "materials directory not found in archive" }
+          Write-Host "Found materials at: $($dir.FullName)"
+          $count = (Get-ChildItem $dir.FullName -Filter "*.material.bin").Count
+          Write-Host "Material files: $count"
+          "path=$($dir.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Convert materials (DXBC -> SPIRV)
+        run: |
+          python tools/convert_materials.py "${{ steps.find-materials.outputs.path }}" converted_materials --jobs 4
+        timeout-minutes: 30
+
+      - name: Fix vertex input locations
+        run: python tools/convert_materials.py fixlocs converted_materials
+
+      - name: Fix descriptor bindings
+        run: python tools/convert_materials.py fixbindings converted_materials
+
+      - name: Verify conversion
+        run: |
+          $original = (Get-ChildItem "${{ steps.find-materials.outputs.path }}" -Filter "*.material.bin").Count
+          $converted = (Get-ChildItem converted_materials -Filter "*.material.bin").Count
+          Write-Host "Original: $original files, Converted: $converted files"
+          if ($converted -ne $original) {
+            throw "Mismatch: expected $original converted files, got $converted"
+          }
+          # Spot-check a few files for SPIRV magic (0x07230203)
+          $checked = 0
+          foreach ($f in Get-ChildItem converted_materials -Filter "*.material.bin" | Select-Object -First 5) {
+            $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
+            $content = [System.Text.Encoding]::ASCII.GetString($bytes)
+            if ($content -match "VSH" -or $content -match "FSH") {
+              $checked++
+            }
+          }
+          Write-Host "Spot-checked $checked files contain shader headers"
+          Write-Host "Converter test passed!"
+
+  release:
+    needs: [build, test-converter]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: FuckDX
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: FuckDX.dll
+          generate_release_notes: true
