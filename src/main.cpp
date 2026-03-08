@@ -182,7 +182,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
     auto gameDir = std::filesystem::path(exePath).parent_path();
 
     g_convertedDir = gameDir / L"data" / L"renderer" / L"converted_materials";
-    g_logFile = _wfopen((dllDir / L"fuckdx.log").c_str(), L"w");
+    _wfopen_s(&g_logFile, (dllDir / L"fuckdx.log").c_str(), L"w");
 
     Log("[FuckDX] FuckDX loaded\n");
 
