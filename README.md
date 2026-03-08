@@ -1,117 +1,139 @@
-# FuckDX
+# VulkanMod-Bedrock (formerly FuckDX)
 
-Force Minecraft Bedrock Edition (Windows, 1.21.132) to use the Vulkan rendering backend instead of DirectX.
+Forces Minecraft Bedrock Edition (Windows) to use the Vulkan rendering backend instead of DirectX.
 
-Minecraft Bedrock uses bgfx with RenderDragon and defaults to Direct3D 12 on Windows. This project forces the Vulkan renderer by:
+## Setup
 
-1. **Hooking `bgfx::init`** to override the renderer type to Vulkan
-2. **Patching the renderer type global** so the material system still selects DirectX shader entries (which now contain pre-converted SPIRV bytecode)
-3. **Pre-converting all `.material.bin` files** from DXBC to SPIRV offline
-
-## Prerequisites
+### Prerequisites
 
 - Windows 10/11
-- Minecraft Bedrock 1.21.132 (Windows GDK / UWP)
+- Minecraft: Bedrock Edition for Windows (GDK version, tested on 1.21.132)
+- A Vulkan 1.1+ capable GPU with up-to-date drivers
 - CMake 3.20+
-- Visual Studio 2026 (MSVC v19.50+)
+- Visual Studio 2022+ (MSVC)
 - Python 3.10+ (for material conversion)
-- A Vulkan-capable GPU with up-to-date drivers
 
-## Building
+### Step 1: Build dxil-spirv (the shader converter)
 
-### DLL (injector mod)
+```bash
+git submodule update --init --recursive
+cd external/dxil-spirv
+cmake -S . -B build -G "Visual Studio 18 2026" -A x64
+cmake --build build --config Release --target dxil-spirv
+cd ../..
+```
+
+This produces `external/dxil-spirv/build/Release/dxil-spirv.exe`.
+
+### Step 2: Convert material files
+
+In PowerShell, convert and fix all materials in one go:
+
+```powershell
+$mc = (Get-AppxPackage "Microsoft.MinecraftUWP").InstallLocation
+python tools/convert_materials.py "$mc\data\renderer\materials" converted_materials --jobs 8  # More jobs = faster conversion, higher CPU load
+python tools/convert_materials.py fixlocs converted_materials
+python tools/convert_materials.py fixbindings converted_materials
+```
+
+Or as a single copy-paste one-liner:
+
+```powershell
+$mc = (Get-AppxPackage "Microsoft.MinecraftUWP").InstallLocation; python tools/convert_materials.py "$mc\data\renderer\materials" converted_materials --jobs 8; python tools/convert_materials.py fixlocs converted_materials; python tools/convert_materials.py fixbindings converted_materials
+```
+
+### Step 3: Build the mod
 
 ```bash
 cmake -S . -B build -G "Visual Studio 18 2026" -A x64
 cmake --build build --config Release
 ```
 
-This produces `build/Release/FuckDX.dll`.
+This produces `build/Release/FuckDX.dll` (or `build/FuckDX.dll` with Ninja).
 
-### dxil-spirv (shader converter)
+### Step 4: Install
 
-```bash
-cd external/dxil-spirv
-git submodule update --init --recursive
-cmake -S . -B build3 -G "Visual Studio 18 2026" -A x64
-cmake --build build3 --config Release --target dxil-spirv
+Copy the built `FuckDX.dll` and the converted materials into the game directory. The easiest way is via PowerShell:
+
+```powershell
+$mc = (Get-AppxPackage "Microsoft.MinecraftUWP").InstallLocation
+New-Item -ItemType Directory -Force "$mc\data\renderer\converted_materials"
+Copy-Item build\FuckDX.dll "$mc\mods\"
+Copy-Item converted_materials\* "$mc\data\renderer\converted_materials\"
 ```
 
-This produces `external/dxil-spirv/build3/Release/dxil-spirv.exe`.
-
-## Usage
-
-### 1. Convert material files
-
-Convert all `.material.bin` files from DXBC to SPIRV:
-
-```bash
-python tools/convert_materials.py <materials_dir> <output_dir> [--jobs N]
+Your folder structure should look like this after the installation:
+```
+<game_root>/
+  Minecraft.Windows.exe
+  data/
+    renderer/
+      materials/              (original game materials)
+      converted_materials/    (our SPIRV materials)
+        ActorBanner.material.bin
+        Clouds.material.bin
+        RenderChunk.material.bin
+        ... (all 150 material files)
+  mods/
+    FuckDX.dll
+    fuckdx.log              (created at runtime)
 ```
 
-Example:
-```bash
-python tools/convert_materials.py \
-  "C:\path\to\Minecraft\data\renderer\materials" \
-  "converted_materials" \
-  --jobs 8
-```
+### Step 5: Launch
 
-Or convert a single file:
-```bash
-python tools/convert_materials.py single input.material.bin output.material.bin
-```
+It is recommended that you use [ModLoader](https://github.com/QYCottage/ModLoader) to inject the DLL, as the mod has to load before the game window loads.
 
-### 2. Replace material files
+1. Download the latest release from [ModLoader](https://github.com/QYCottage/ModLoader/releases)
+2. Copy `winhttp.dll` into your game root (next to `Minecraft.Windows.exe`)
+3. Launch Minecraft normally — ModLoader will load `FuckDX.dll` from `mods/` automatically
 
-Copy the converted `.material.bin` files back into the game's `data/renderer/materials/` directory, replacing the originals.
-
-### 3. Inject the DLL
-
-Inject `FuckDX.dll` into `Minecraft.Windows.exe` at startup using your preferred DLL injector. The DLL will:
-
-- Hook `bgfx::init` and force Vulkan renderer
-- Patch the renderer type global to D3D12 so the material system loads the "Direct3D_SM50" shader entries (which now contain SPIRV)
-- Open a console window showing status messages
+Check `mods/fuckdx.log` if something goes wrong.
 
 ## How it works
 
 ### The problem
 
-Minecraft Bedrock's `.material.bin` files contain compiled shaders tagged by platform (e.g. `Direct3D_SM50`). There are no Vulkan/SPIRV shader entries. When you force Vulkan, the material system can't find matching shaders and the GPU hangs (TDR).
+Minecraft Bedrock's `.material.bin` files contain compiled shaders tagged by platform (e.g. `Direct3D_SM50`). There are **no Vulkan/SPIRV shader entries**. bgfx's Vulkan renderer is present in the binary but unused — when forced on, it can't find matching shaders and the game produces no frames, causing the game to crash.
 
 ### The solution
 
-1. **Offline**: Convert DXBC bytecode inside bgfx shader binaries to SPIRV using [dxil-spirv](https://github.com/HansKristian-Work/dxil-spirv). The shader entries keep their `Direct3D_SM50` platform tag, but the payload is now SPIRV.
+**Offline (material conversion):**
 
-2. **Runtime**: The DLL hooks `bgfx::init` to force Vulkan. After init completes, it patches `dword_14970B170` (the renderer type global, RVA `0x970B170`) back to D3D12 (2). This tricks the material system into selecting DirectX-tagged entries, which now contain SPIRV that Vulkan can consume.
+1. The converter parses each `.material.bin` file and locates all the DXBC shader blobs (both bgfx-wrapped VSH/FSH/CSH binaries and bare DXBC entries)
+2. Each DXBC blob is then converted to SPIRV using [dxil-spirv](https://github.com/HansKristian-Work/dxil-spirv)
+3. SPIRV version is downgraded from 1.6 to 1.3 to broaden GPU compatibility (strips VulkanMemoryModel, DemoteToHelperInvocation, etc.)
+4. Vertex input locations are remapped to match bgfx's `Attrib` enum (Position=0, TexCoord0=10, etc.)
+5. Descriptor bindings are also remapped to bgfx's Vulkan scheme (VS UBO at binding 0, FS UBO at 48, samplers at stage_base+16/32+N)
+6. Size fields are updated in the bgfx binary headers to account for SPIRV payload size differences
 
-### Key addresses (1.21.132)
+The shader entries keep their `Direct3D_SM50` platform tag, but the payload is now SPIRV.
 
-| Address (VA) | RVA | Description |
-|---|---|---|
-| `0x146ADD160` | `0x6ADD160` | `bgfx::init` (hook target) |
-| `0x14970B170` | `0x970B170` | Renderer type global |
-| `0x146AD8940` | `0x6AD8940` | `bgfx::Context::_initFinalize` |
+**Runtime (DLL hooks):**
 
-## Project structure
+Three hooks work together:
 
-```
-FuckDX/
-  src/main.cpp              # DLL source (hook + patches)
-  CMakeLists.txt            # DLL build
-  tools/
-    convert_materials.py    # Batch DXBC->SPIRV material converter
-    material_bin.py         # .material.bin parser/scanner
-  external/
-    dxil-spirv/             # DXBC/DXIL to SPIRV converter (submodule)
-```
+1. **`bgfx::init` hook** — Overwrites the renderer type in the init struct to 10 (Vulkan). Disables D3D12 backend entries in the factory table to prevent fallback. After init succeeds, patches the renderer type global back to 4 (D3D12 RTX) so the material system selects DirectX-tagged entries — which now contain our converted SPIRV.
+
+2. **`CreateFileW` hook** — Intercepts file opens for `.material.bin` and redirects them to `data/renderer/converted_materials/`, leaving the original game files untouched.
+
+3. **`vkCmdSetViewport` hook** — Applies a negative viewport height Y-flip (`y = y + height, height = -height`) to compensate for Vulkan's inverted clip-space Y vs Direct3D. Installed via a `vkGetDeviceProcAddr` interception on the Vulkan loader, so it works without any hardcoded game offsets.
+
+## Updating
+
+When updating to a new Minecraft version:
+1. Re-run `convert_materials.py` against the new version's material files (shader bytecode changes between versions)
+2. Re-run `fixlocs` and `fixbindings` on the output
+3. If the DLL fails to find signatures (check `fuckdx.log`), please open an issue attaching the log file.
 
 ## Limitations
 
-- Hardcoded for Minecraft Bedrock 1.21.132. Signature scan for `bgfx::init` may work across versions, but the renderer type global RVA will change.
-- Shader conversion is lossy in edge cases — some complex compute shaders may not convert cleanly.
-- No support for encrypted `.material.bin` files (encryption variant must be 0 / "NONE").
+- Materials may need to be re-converted for each game update due to shader bytecode changes
+- There's no support for encrypted `.material.bin` files (encryption variant must be "NONE")
+- Terrain (RenderChunk) may have minor texture sampling differences due to DXBC-to-SPIRV conversion edge cases
+
+## Known bugs
+
+- Entity shadows do not render
 
 ## Credits
 
