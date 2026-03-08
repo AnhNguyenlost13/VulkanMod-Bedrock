@@ -134,6 +134,7 @@ When updating to a new Minecraft version:
 ## Known bugs
 
 - Entity shadows do not render
+- Enabling Vibrant Visuals will crash the game
 
 ## Credits
 
