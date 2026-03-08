@@ -59,7 +59,7 @@ jobs:
 
       - name: Convert materials (DXBC -> SPIRV)
         run: |
-          python tools/convert_materials.py "${{ steps.find-materials.outputs.path }}" converted_materials --jobs 4
+          python tools/convert_materials.py "${{ steps.find-materials.outputs.path }}" converted_materials --jobs 16
         timeout-minutes: 30
 
       - name: Fix vertex input locations
@@ -76,9 +76,9 @@ jobs:
           if ($converted -ne $original) {
             throw "Mismatch: expected $original converted files, got $converted"
           }
-          # Spot-check a few files for SPIRV magic (0x07230203)
+          # Spot-check all files for SPIRV magic (0x07230203)
           $checked = 0
-          foreach ($f in Get-ChildItem converted_materials -Filter "*.material.bin" | Select-Object -First 5) {
+          foreach ($f in Get-ChildItem converted_materials -Filter "*.material.bin") {
             $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
             $content = [System.Text.Encoding]::ASCII.GetString($bytes)
             if ($content -match "VSH" -or $content -match "FSH") {
