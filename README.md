@@ -132,6 +132,7 @@ When updating to a new Minecraft version:
 ## Limitations
 
 - Materials may need to be re-converted for each game update due to shader bytecode changes
+- Mojang may remove the Vulkan backend from the game altogether
 - There's no support for encrypted `.material.bin` files (encryption variant must be "NONE")
 - Terrain (RenderChunk) may have minor texture sampling differences due to DXBC-to-SPIRV conversion edge cases
 
