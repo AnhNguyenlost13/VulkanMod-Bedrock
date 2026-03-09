@@ -1,6 +1,10 @@
 # VulkanMod-Bedrock (formerly FuckDX)
 
-Forces Minecraft Bedrock Edition (Windows) to use the Vulkan rendering backend instead of DirectX.
+
+A standalone mod that forces Minecraft: Bedrock Edition (Windows) to use the Vulkan rendering backend instead of DirectX.
+
+## Mod in Action
+<img src="screenshot.png">
 
 ## Setup
 
