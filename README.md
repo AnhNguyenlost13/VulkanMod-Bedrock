@@ -11,7 +11,7 @@ A standalone mod that forces Minecraft: Bedrock Edition (Windows) to use the Vul
 ### Prerequisites
 
 - Windows 10/11
-- Minecraft: Bedrock Edition for Windows (GDK version, tested on 1.21.132)
+- Minecraft: Bedrock Edition for Windows (GDK version, tested on 1.21.130)
 - A Vulkan 1.1+ capable GPU with up-to-date drivers
 - CMake 3.20+
 - Visual Studio 2022+ (MSVC)
@@ -135,6 +135,7 @@ When updating to a new Minecraft version:
 - Mojang may remove the Vulkan backend from the game altogether
 - There's no support for encrypted `.material.bin` files (encryption variant must be "NONE")
 - Terrain (RenderChunk) may have minor texture sampling differences due to DXBC-to-SPIRV conversion edge cases
+- Mod needs to be injected before bgfx init
 
 ## Known bugs
 
