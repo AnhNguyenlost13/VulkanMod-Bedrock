@@ -150,4 +150,4 @@ When updating to a new Minecraft version:
 
 ## License
 
-MIT
+  [MIT](LICENSE)
